@@ -9,10 +9,12 @@ import {
   Copy,
   FileCsv,
   FlagCheckered,
+  ListBullets,
   MapPin,
   PencilSimple,
   Plus,
   ShareNetwork,
+  Ticket,
   Trash,
   Warning
 } from '@phosphor-icons/react'
@@ -62,6 +64,7 @@ import type {
 } from './types'
 
 type Mode = 'loading' | 'onboarding' | 'invite' | 'trip'
+type MainView = 'itinerary' | 'reservations'
 
 export default function App() {
   const [mode, setMode] = useState<Mode>('loading')
@@ -79,6 +82,7 @@ export default function App() {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [csvOpen, setCsvOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [view, setView] = useState<MainView>('itinerary')
   const [notice, setNotice] = useState('')
   const [tick, setTick] = useState(0)
 
@@ -325,6 +329,13 @@ export default function App() {
   const pendingCount = plans.filter(
     (plan) => plan.dirty || plan.conflict_remote
   ).length
+  const reservationPendingCount = plans.filter(
+    (plan) =>
+      plan.status !== 'done' &&
+      (plan.booking_status === 'required' ||
+        plan.booking_status === 'recommended' ||
+        plan.booking_status === 'none')
+  ).length
   const support = notificationSupport()
 
   if (mode === 'loading') {
@@ -380,101 +391,106 @@ export default function App() {
         </p>
       ) : null}
 
-      <section className='next-section' aria-labelledby='next-title'>
-        <div className='section-title'>
-          <h2 id='next-title'>Lo siguiente</h2>
-        </div>
-        {activePlan ? (
-          <article className={`next-card ${activePlan.status}`}>
-            <div className='next-main'>
-              <div className='next-meta'>
-                <span>
-                  {formatDayLabel(activePlan.local_date, trip.timezone)}
-                </span>
-                <span className='next-flags'>
-                  {activePlan.booking_status !== 'none' &&
-                  activePlan.booking_status !== 'not_required' ? (
-                    <span
-                      className={`booking-pill ${activePlan.booking_status}`}
-                    >
-                      {bookingStatusLabel(activePlan.booking_status)}
-                    </span>
-                  ) : null}
-                  <span className={`next-status ${activePlan.status}`}>
-                    {planStatusLabel(activePlan.status)}
+      {view === 'itinerary' ? (
+        <section className='next-section' aria-labelledby='next-title'>
+          <div className='section-title'>
+            <h2 id='next-title'>Lo siguiente</h2>
+          </div>
+          {activePlan ? (
+            <article className={`next-card ${activePlan.status}`}>
+              <div className='next-main'>
+                <div className='next-meta'>
+                  <span>
+                    {formatDayLabel(activePlan.local_date, trip.timezone)}
                   </span>
-                </span>
-              </div>
-              <h3>{activePlan.title}</h3>
-              <p className='next-time'>
-                {formatPlanTime(activePlan, trip.timezone)}
-              </p>
-              {activePlan.location ? (
-                <p className='meta-line'>
-                  <MapPin size={17} /> {activePlan.location}
+                  <span className='next-flags'>
+                    {activePlan.booking_status !== 'none' &&
+                    activePlan.booking_status !== 'not_required' ? (
+                      <span
+                        className={`booking-pill ${activePlan.booking_status}`}
+                      >
+                        {bookingStatusLabel(activePlan.booking_status)}
+                      </span>
+                    ) : null}
+                    <span className={`next-status ${activePlan.status}`}>
+                      {planStatusLabel(activePlan.status)}
+                    </span>
+                  </span>
+                </div>
+                <h3>{activePlan.title}</h3>
+                <p className='next-time'>
+                  {formatPlanTime(activePlan, trip.timezone)}
                 </p>
-              ) : null}
-            </div>
-            <div className='leave-box'>
-              <span>{relativeTiming(activePlan, trip.timezone)}</span>
-              <strong>
-                Salir{' '}
-                {utcToTripTime(leaveAtIso(activePlan), trip.timezone).toFormat(
-                  'HH:mm'
-                )}
-              </strong>
-              <small>
-                {activePlan.travel_minutes + activePlan.buffer_minutes > 0
-                  ? `${activePlan.travel_minutes + activePlan.buffer_minutes} min de traslado + margen`
-                  : 'Sin traslado ni margen'}
-              </small>
-            </div>
-            <div className='next-actions'>
-              {activePlan.status === 'confirmed' ? (
-                <>
+                {activePlan.location ? (
+                  <p className='meta-line'>
+                    <MapPin size={17} /> {activePlan.location}
+                  </p>
+                ) : null}
+              </div>
+              <div className='leave-box'>
+                <span>{relativeTiming(activePlan, trip.timezone)}</span>
+                <strong>
+                  Salir{' '}
+                  {utcToTripTime(
+                    leaveAtIso(activePlan),
+                    trip.timezone
+                  ).toFormat('HH:mm')}
+                </strong>
+                <small>
+                  {activePlan.travel_minutes + activePlan.buffer_minutes > 0
+                    ? `${activePlan.travel_minutes + activePlan.buffer_minutes} min de traslado + margen`
+                    : 'Sin traslado ni margen'}
+                </small>
+              </div>
+              <div className='next-actions'>
+                {activePlan.status === 'confirmed' ? (
+                  <>
+                    <button
+                      className='next-action primary'
+                      type='button'
+                      onClick={() => void updatePlanStatus(activePlan, 'done')}
+                    >
+                      <FlagCheckered size={17} weight='fill' /> Marcar hecho
+                    </button>
+                    <button
+                      className='next-action'
+                      type='button'
+                      onClick={() => void updatePlanStatus(activePlan, 'idea')}
+                    >
+                      <Circle size={17} /> Volver a idea
+                    </button>
+                  </>
+                ) : (
                   <button
                     className='next-action primary'
                     type='button'
-                    onClick={() => void updatePlanStatus(activePlan, 'done')}
+                    onClick={() =>
+                      void updatePlanStatus(activePlan, 'confirmed')
+                    }
                   >
-                    <FlagCheckered size={17} weight='fill' /> Marcar hecho
+                    <CheckCircle size={17} /> Confirmar
                   </button>
-                  <button
-                    className='next-action'
-                    type='button'
-                    onClick={() => void updatePlanStatus(activePlan, 'idea')}
-                  >
-                    <Circle size={17} /> Volver a idea
-                  </button>
-                </>
-              ) : (
+                )}
                 <button
-                  className='next-action primary'
+                  className='next-action'
                   type='button'
-                  onClick={() => void updatePlanStatus(activePlan, 'confirmed')}
+                  onClick={() => {
+                    setEditing(activePlan)
+                    setSheetOpen(true)
+                  }}
                 >
-                  <CheckCircle size={17} /> Confirmar
+                  <PencilSimple size={17} /> Editar
                 </button>
-              )}
-              <button
-                className='next-action'
-                type='button'
-                onClick={() => {
-                  setEditing(activePlan)
-                  setSheetOpen(true)
-                }}
-              >
-                <PencilSimple size={17} /> Editar
-              </button>
+              </div>
+            </article>
+          ) : (
+            <div className='empty-state'>
+              <h3>Sin planes pendientes</h3>
+              <p>Añade el primer plan o importa el itinerario desde Excel.</p>
             </div>
-          </article>
-        ) : (
-          <div className='empty-state'>
-            <h3>Sin planes pendientes</h3>
-            <p>Añade el primer plan o importa el itinerario desde Excel.</p>
-          </div>
-        )}
-      </section>
+          )}
+        </section>
+      ) : null}
 
       <nav className='quick-actions' aria-label='Acciones principales'>
         <button
@@ -485,6 +501,18 @@ export default function App() {
           }}
         >
           <Plus size={19} /> Plan
+        </button>
+        <button
+          className={
+            view === 'reservations' ? 'primary-button' : 'secondary-button'
+          }
+          aria-pressed={view === 'reservations'}
+          onClick={() =>
+            setView(view === 'reservations' ? 'itinerary' : 'reservations')
+          }
+        >
+          <Ticket size={19} /> Reservas
+          {reservationPendingCount > 0 ? ` · ${reservationPendingCount}` : ''}
         </button>
         <button className='secondary-button' onClick={() => setCsvOpen(true)}>
           <FileCsv size={19} /> CSV
@@ -530,45 +558,57 @@ export default function App() {
         </section>
       ) : null}
 
-      <section className='timeline' aria-labelledby='timeline-title'>
-        <div className='section-title'>
-          <h2 id='timeline-title'>Día por día</h2>
-        </div>
-        {grouped.length ? (
-          grouped.map(([date, dayPlans]) => (
-            <section
-              className='day-group'
-              key={date}
-              aria-label={formatDayLabel(date, trip.timezone)}
-            >
-              <h3>{formatDayLabel(date, trip.timezone)}</h3>
-              <div className='plan-list'>
-                {dayPlans.map((plan) => (
-                  <PlanCard
-                    key={plan.id}
-                    plan={plan}
-                    timezone={trip.timezone}
-                    overlap={overlapIds.has(plan.id)}
-                    onEdit={() => {
-                      setEditing(plan)
-                      setSheetOpen(true)
-                    }}
-                    onDelete={() => void handleDelete(plan)}
-                    onStatusChange={(status) =>
-                      void updatePlanStatus(plan, status)
-                    }
-                  />
-                ))}
-              </div>
-            </section>
-          ))
-        ) : (
-          <div className='empty-state'>
-            <h3>Todavía no hay planes</h3>
-            <p>Crea uno manualmente o importa filas desde un CSV.</p>
+      {view === 'reservations' ? (
+        <ReservationsView
+          plans={plans}
+          timezone={trip.timezone}
+          onBack={() => setView('itinerary')}
+          onEdit={(plan) => {
+            setEditing(plan)
+            setSheetOpen(true)
+          }}
+        />
+      ) : (
+        <section className='timeline' aria-labelledby='timeline-title'>
+          <div className='section-title'>
+            <h2 id='timeline-title'>Día por día</h2>
           </div>
-        )}
-      </section>
+          {grouped.length ? (
+            grouped.map(([date, dayPlans]) => (
+              <section
+                className='day-group'
+                key={date}
+                aria-label={formatDayLabel(date, trip.timezone)}
+              >
+                <h3>{formatDayLabel(date, trip.timezone)}</h3>
+                <div className='plan-list'>
+                  {dayPlans.map((plan) => (
+                    <PlanCard
+                      key={plan.id}
+                      plan={plan}
+                      timezone={trip.timezone}
+                      overlap={overlapIds.has(plan.id)}
+                      onEdit={() => {
+                        setEditing(plan)
+                        setSheetOpen(true)
+                      }}
+                      onDelete={() => void handleDelete(plan)}
+                      onStatusChange={(status) =>
+                        void updatePlanStatus(plan, status)
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
+            ))
+          ) : (
+            <div className='empty-state'>
+              <h3>Todavía no hay planes</h3>
+              <p>Crea uno manualmente o importa filas desde un CSV.</p>
+            </div>
+          )}
+        </section>
+      )}
 
       {sheetOpen ? (
         <PlanSheet
@@ -800,6 +840,157 @@ function PlanCard({
         </button>
       </div>
     </article>
+  )
+}
+
+const RESERVATION_GROUPS: {
+  key: string
+  title: string
+  description: string
+  match: (plan: LocalPlan) => boolean
+}[] = [
+  {
+    key: 'required',
+    title: 'Por reservar',
+    description: 'Obligatorias y todavía sin gestionar.',
+    match: (plan) => plan.booking_status === 'required'
+  },
+  {
+    key: 'recommended',
+    title: 'Reserva sugerida',
+    description: 'Conviene decidir si reservar o no.',
+    match: (plan) => plan.booking_status === 'recommended'
+  },
+  {
+    key: 'review',
+    title: 'Por revisar',
+    description: 'Sin decisión: revisad si hace falta reserva.',
+    match: (plan) => plan.booking_status === 'none'
+  },
+  {
+    key: 'booked',
+    title: 'Reservado',
+    description: 'Ya gestionadas.',
+    match: (plan) => plan.booking_status === 'booked'
+  }
+]
+
+function ReservationsView({
+  plans,
+  timezone,
+  onBack,
+  onEdit
+}: {
+  plans: LocalPlan[]
+  timezone: string
+  onBack: () => void
+  onEdit: (plan: LocalPlan) => void
+}) {
+  const groups = RESERVATION_GROUPS.map((group) => ({
+    ...group,
+    items: plans
+      .filter((plan) => plan.status !== 'done' && group.match(plan))
+      .sort((a, b) => a.start_at.localeCompare(b.start_at))
+  }))
+  const total = groups.reduce((sum, group) => sum + group.items.length, 0)
+  const pending =
+    groups[0].items.length + groups[1].items.length + groups[2].items.length
+
+  return (
+    <section className='reservations' aria-labelledby='reservations-title'>
+      <div className='section-title'>
+        <h2 id='reservations-title'>Reservas</h2>
+        <button className='secondary-button' onClick={onBack}>
+          <ListBullets size={18} /> Itinerario
+        </button>
+      </div>
+      <p className='reservation-summary'>
+        {pending
+          ? `${pending} por gestionar · ${groups[3].items.length} reservada${groups[3].items.length === 1 ? '' : 's'}`
+          : `Todo gestionado · ${groups[3].items.length} reservada${groups[3].items.length === 1 ? '' : 's'}`}
+      </p>
+      {total === 0 ? (
+        <div className='empty-state'>
+          <h3>Sin reservas en marcha</h3>
+          <p>
+            Los planes marcados como “Sin reserva” o “Hecho” no aparecen aquí.
+          </p>
+        </div>
+      ) : (
+        groups.map(
+          (group) =>
+            group.items.length > 0 && (
+              <section
+                className={`reservation-group ${group.key}`}
+                key={group.key}
+                aria-label={group.title}
+              >
+                <h3>
+                  {group.title}
+                  <span className='count'>{group.items.length}</span>
+                </h3>
+                <p className='helper'>{group.description}</p>
+                <div className='plan-list'>
+                  {group.items.map((plan) => (
+                    <article
+                      className={`reservation-card ${group.key} ${plan.dirty ? 'pending' : ''}`}
+                      key={plan.id}
+                    >
+                      <div className='plan-content'>
+                        <div className='plan-heading'>
+                          <h4>{plan.title}</h4>
+                          <span
+                            className={`dot ${plan.status}`}
+                            aria-label={planStatusLabel(plan.status)}
+                          />
+                        </div>
+                        <div className='plan-flags'>
+                          {plan.status === 'idea' ? (
+                            <span className='flag idea'>Idea</span>
+                          ) : null}
+                          <span
+                            className={`flag booking ${plan.booking_status}`}
+                          >
+                            {bookingStatusLabel(plan.booking_status)}
+                          </span>
+                        </div>
+                        <p className='meta-line'>
+                          {formatDayLabel(plan.local_date, timezone)} ·{' '}
+                          {plan.start_time.slice(0, 5)}
+                          {plan.end_time ? `–${plan.end_time.slice(0, 5)}` : ''}
+                        </p>
+                        {plan.location ? (
+                          <p className='meta-line'>
+                            <MapPin size={16} /> {plan.location}
+                          </p>
+                        ) : null}
+                        {plan.notes ? (
+                          <details className='notes'>
+                            <summary>Notas</summary>
+                            <p>{plan.notes}</p>
+                          </details>
+                        ) : null}
+                        {plan.dirty ? (
+                          <p className='helper'>Pendiente de sincronizar</p>
+                        ) : null}
+                      </div>
+                      <div className='card-actions'>
+                        <button
+                          className='icon-button'
+                          onClick={() => onEdit(plan)}
+                          aria-label={`Gestionar ${plan.title}`}
+                        >
+                          <PencilSimple size={20} />
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )
+        )
+      )}
+    </section>
   )
 }
 
