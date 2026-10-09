@@ -1,6 +1,6 @@
-import type { RealtimeChannel } from '@supabase/supabase-js'
 import { db, getMeta, setMeta, toLocalPlan } from './db'
-import { ensureAnonymousSession, supabase } from './supabase'
+import { api, convex, ensureUser } from './convexClient'
+import type { Doc, Id } from '../../convex/_generated/dataModel'
 import type {
   LocalPlan,
   MemberRecord,
@@ -28,33 +28,28 @@ export async function createTrip(
   timezone: string,
   displayName?: string
 ) {
-  await ensureAnonymousSession()
-  const { data, error } = await supabase.rpc('create_trip', {
-    p_name: name,
-    p_timezone: timezone,
-    p_display_name: displayName ?? null
+  const user = await ensureUser()
+  const result = await convex.mutation(api.trips.createTrip, {
+    userId: user.id,
+    name,
+    timezone,
+    displayName: displayName ?? ''
   })
-  if (error) throw error
-  const row = data?.[0]
-  if (!row?.trip_id || !row.invite_token)
-    throw new Error('Trip creation did not return an invite.')
-  await setMeta(`invite:${row.trip_id}`, row.invite_token)
-  await setMeta('activeTripId', row.trip_id)
-  return row as { trip_id: string; invite_token: string }
+  await setMeta(`invite:${result.tripId}`, result.inviteToken)
+  await setMeta('activeTripId', result.tripId)
+  return { trip_id: result.tripId, invite_token: result.inviteToken }
 }
 
 export async function joinTrip(token: string, displayName?: string) {
-  await ensureAnonymousSession()
-  const { data, error } = await supabase.rpc('join_trip', {
-    p_token: token,
-    p_display_name: displayName ?? null
+  const user = await ensureUser()
+  const result = await convex.mutation(api.trips.joinTrip, {
+    userId: user.id,
+    inviteToken: token,
+    displayName: displayName ?? ''
   })
-  if (error) throw mapRpcError(error)
-  const row = data?.[0]
-  if (!row?.trip_id) throw new Error('No se pudo unir al viaje.')
-  await setMeta(`invite:${row.trip_id}`, token)
-  await setMeta('activeTripId', row.trip_id)
-  return row as { trip_id: string; trip_name: string }
+  await setMeta(`invite:${result.tripId}`, token)
+  await setMeta('activeTripId', result.tripId)
+  return { trip_id: result.tripId, trip_name: result.tripName }
 }
 
 export async function getStoredTripId() {
@@ -66,13 +61,13 @@ export async function getInviteToken(tripId: string) {
 }
 
 export async function regenerateInvite(tripId: string) {
-  await ensureAnonymousSession()
-  const { data, error } = await supabase.rpc('regenerate_invite', {
-    p_trip_id: tripId
+  const user = await ensureUser()
+  const { inviteToken } = await convex.mutation(api.trips.regenerateInvite, {
+    userId: user.id,
+    tripId: tripId as Id<'trips'>
   })
-  if (error) throw mapRpcError(error)
-  await setMeta(`invite:${tripId}`, data)
-  return data as string
+  await setMeta(`invite:${tripId}`, inviteToken)
+  return inviteToken
 }
 
 export async function loadLocalTrip(tripId: string) {
@@ -91,32 +86,25 @@ async function performSyncTrip(tripId: string, onStatus?: SyncListener) {
   }
   onStatus?.('syncing')
   try {
-    await ensureAnonymousSession()
-    const [
-      { data: trip, error: tripError },
-      { data: members, error: membersError },
-      { data: remotePlans, error: plansError }
-    ] = await Promise.all([
-      supabase.from('trips').select('*').eq('id', tripId).maybeSingle(),
-      supabase.from('trip_members').select('*').eq('trip_id', tripId),
-      supabase.from('plans').select('*').eq('trip_id', tripId)
-    ])
-    if (tripError) throw tripError
-    if (membersError) throw membersError
-    if (plansError) throw plansError
-    if (!trip) throw new Error('Este dispositivo ya no tiene acceso al viaje.')
-
+    const user = await ensureUser()
+    const snapshot = await convex.query(api.plans.snapshot, {
+      userId: user.id,
+      tripId: tripId as Id<'trips'>
+    })
+    if (!snapshot.trip) {
+      throw new Error('Este dispositivo ya no tiene acceso al viaje.')
+    }
     await reconcileRemote(
-      trip as TripRecord,
-      (members ?? []) as MemberRecord[],
-      (remotePlans ?? []) as PlanRecord[]
+      docToTrip(snapshot.trip),
+      snapshot.members.map(docToMember),
+      snapshot.plans.map(docToPlan)
     )
+
     const pending = await db.plans
       .where('trip_id')
       .equals(tripId)
       .filter((plan) => plan.dirty && !plan.conflict_remote)
       .toArray()
-
     await Promise.all(pending.map((plan) => pushLocalPlan(plan)))
 
     const remaining = await db.plans
@@ -174,45 +162,37 @@ async function reconcileRemote(
 }
 
 async function pushLocalPlan(plan: LocalPlan) {
-  const { data, error } = await supabase.rpc('save_plan', {
-    p_plan: {
-      id: plan.id,
-      trip_id: plan.trip_id,
-      base_version: plan.base_version,
-      deleted: Boolean(plan.pending_delete),
-      title: plan.title,
-      local_date: plan.local_date,
-      start_time: plan.start_time,
-      end_time: plan.end_time,
-      start_at: plan.start_at,
-      location: plan.location,
-      notes: plan.notes,
-      status: plan.status,
-      booking_status: plan.booking_status,
-      travel_minutes: plan.travel_minutes,
-      buffer_minutes: plan.buffer_minutes,
-      reminder_minutes: plan.reminder_minutes
-    }
+  const user = await ensureUser()
+  const result = await convex.mutation(api.plans.save, {
+    userId: user.id,
+    tripId: plan.trip_id as Id<'trips'>,
+    planId: plan.id,
+    baseVersion: plan.base_version,
+    deleted: Boolean(plan.pending_delete),
+    title: plan.title,
+    localDate: plan.local_date,
+    startTime: plan.start_time,
+    endTime: plan.end_time,
+    startAtMs: Date.parse(plan.start_at),
+    location: plan.location ?? '',
+    notes: plan.notes ?? '',
+    status: plan.status,
+    bookingStatus: plan.booking_status,
+    travelMinutes: plan.travel_minutes,
+    bufferMinutes: plan.buffer_minutes,
+    reminderMinutes: plan.reminder_minutes
   })
 
-  if (error) throw mapRpcError(error)
-  const status = data?.status
-  const remote = data?.plan as PlanRecord | undefined
-  if (status === 'conflict' && remote) {
-    await db.plans.put({ ...plan, conflict_remote: remote })
+  if (result.status === 'conflict' && result.plan) {
+    await db.plans.put({ ...plan, conflict_remote: docToPlan(result.plan) })
     return
   }
-  if (status === 'deleted') {
+  if (result.plan?.deletedAt || plan.pending_delete) {
     await db.plans.delete(plan.id)
     return
   }
-  if (!remote) throw new Error('La sincronización no devolvió el plan.')
-
-  if (plan.pending_delete || remote.deleted_at) {
-    await db.plans.delete(plan.id)
-  } else {
-    await db.plans.put(toLocalPlan(remote))
-  }
+  if (!result.plan) throw new Error('La sincronización no devolvió el plan.')
+  await db.plans.put(toLocalPlan(docToPlan(result.plan)))
 }
 
 export async function resolveConflict(plan: LocalPlan, keepLocal: boolean) {
@@ -231,28 +211,27 @@ export async function resolveConflict(plan: LocalPlan, keepLocal: boolean) {
   }
 }
 
-export function subscribeToPlans(
-  tripId: string,
-  onChange: () => void
-): RealtimeChannel {
+export function subscribeToPlans(tripId: string, onChange: () => void) {
+  let unsubscribe: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
-  const debounced = () => {
-    clearTimeout(timer)
-    timer = setTimeout(onChange, 400)
-  }
-  return supabase
-    .channel(`plans:${tripId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'plans',
-        filter: `trip_id=eq.${tripId}`
-      },
-      debounced
+
+  void ensureUser().then((user) => {
+    unsubscribe = convex.onUpdate(
+      api.plans.snapshot,
+      { userId: user.id, tripId: tripId as Id<'trips'> },
+      () => {
+        clearTimeout(timer)
+        timer = setTimeout(onChange, 400)
+      }
     )
-    .subscribe()
+  })
+
+  return {
+    unsubscribe: () => {
+      clearTimeout(timer)
+      unsubscribe?.()
+    }
+  }
 }
 
 export async function updateDisplayName(
@@ -260,22 +239,57 @@ export async function updateDisplayName(
   userId: string,
   displayName: string
 ) {
-  const { error } = await supabase
-    .from('trip_members')
-    .update({ display_name: displayName })
-    .eq('trip_id', tripId)
-    .eq('user_id', userId)
-  if (error) throw error
+  await convex.mutation(api.members.updateDisplayName, {
+    userId,
+    tripId: tripId as Id<'trips'>,
+    displayName
+  })
 }
 
-function mapRpcError(error: { message?: string }) {
-  if (error.message?.includes('RATE_LIMITED'))
-    return new Error('Demasiados intentos. Espera unos minutos.')
-  if (error.message?.includes('INVITE_NOT_FOUND'))
-    return new Error('El enlace no es válido o fue regenerado.')
-  if (error.message?.includes('NOT_MEMBER'))
-    return new Error('Este dispositivo ya no pertenece al viaje.')
-  if (error.message?.includes('INVALID_TIMEZONE'))
-    return new Error('La zona horaria no es válida.')
-  return new Error(error.message || 'Error de Supabase.')
+const toIso = (ms: number) => new Date(ms).toISOString()
+
+function docToTrip(doc: Doc<'trips'>): TripRecord {
+  return {
+    id: doc._id,
+    name: doc.name,
+    timezone: doc.timezone,
+    invite_created_at: toIso(doc.inviteCreatedAt),
+    created_by: doc.createdBy,
+    created_at: toIso(doc.createdAt),
+    updated_at: toIso(doc.updatedAt)
+  }
+}
+
+function docToMember(doc: Doc<'tripMembers'>): MemberRecord {
+  return {
+    trip_id: doc.tripId,
+    user_id: doc.userId,
+    display_name: doc.displayName ?? '',
+    joined_at: toIso(doc.joinedAt)
+  }
+}
+
+function docToPlan(doc: Doc<'plans'>): PlanRecord {
+  return {
+    id: doc.planId,
+    trip_id: doc.tripId,
+    title: doc.title,
+    local_date: doc.localDate,
+    start_time: doc.startTime,
+    end_time: doc.endTime,
+    start_at: toIso(doc.startAtMs),
+    location: doc.location || null,
+    notes: doc.notes || null,
+    status: doc.status,
+    booking_status: doc.bookingStatus ?? 'none',
+    travel_minutes: doc.travelMinutes,
+    buffer_minutes: doc.bufferMinutes,
+    reminder_minutes: doc.reminderMinutes,
+    version: doc.version,
+    deleted_at: doc.deletedAt ? toIso(doc.deletedAt) : null,
+    created_by: doc.createdBy,
+    updated_by: doc.updatedBy,
+    created_at: toIso(doc.createdAt),
+    updated_at: toIso(doc.updatedAt)
+  }
 }

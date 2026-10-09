@@ -2,6 +2,5 @@ packages:
   - "."
 
 allowBuilds:
-  supabase: true
   esbuild: true
   workerd: true

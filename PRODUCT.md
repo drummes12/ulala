@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-delegated: React + TypeScript + Vite PWA, Supabase Postgres/Auth/Realtime/Edge Functions, IndexedDB local persistence. Chosen because the product needs installable offline behavior, shared trip state, and server-scheduled push notifications.
+delegated: React + TypeScript + Vite PWA, Convex backend (DB/queries/mutations/realtime/crons), IndexedDB local persistence. Chosen because the product needs installable offline behavior, shared trip state, and server-scheduled push notifications.
 
 ## Users
 

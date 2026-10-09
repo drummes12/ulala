@@ -29,7 +29,7 @@ import {
 } from './lib/db'
 import { enableNotifications, notificationSupport } from './lib/notifications'
 import { bookingStatusLabel, planStatusLabel } from './lib/planLabels'
-import { ensureAnonymousSession, supabase } from './lib/supabase'
+import { ensureUser } from './lib/convexClient'
 import {
   createTrip,
   getInviteToken,
@@ -127,8 +127,8 @@ export default function App() {
       setPlans(
         local.plans.filter((plan) => !plan.pending_delete && !plan.deleted_at)
       )
-      const { data } = await supabase.auth.getSession()
-      if (data.session?.user) setUserId(data.session.user.id)
+      const user = await ensureUser()
+      setUserId(user.id)
       setMode('trip')
       void runSync(storedTripId)
     })()
@@ -149,9 +149,9 @@ export default function App() {
 
   useEffect(() => {
     if (!tripId || mode !== 'trip') return
-    const channel = subscribeToPlans(tripId, () => void runSync(tripId))
+    const subscription = subscribeToPlans(tripId, () => void runSync(tripId))
     return () => {
-      void supabase.removeChannel(channel)
+      subscription.unsubscribe()
     }
   }, [mode, runSync, tripId])
 
@@ -163,7 +163,7 @@ export default function App() {
     setBusy(true)
     setFormError('')
     try {
-      const user = await ensureAnonymousSession()
+      const user = await ensureUser()
       setUserId(user.id)
       const created = await createTrip(name, timezone, displayName)
       setTripId(created.trip_id)
@@ -183,7 +183,7 @@ export default function App() {
     setBusy(true)
     setFormError('')
     try {
-      const user = await ensureAnonymousSession()
+      const user = await ensureUser()
       setUserId(user.id)
       const joined = await joinTrip(inviteToken, displayName)
       history.replaceState(null, '', '/')
