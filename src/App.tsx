@@ -101,6 +101,7 @@ export default function App() {
   const [openDays, setOpenDays] = useState<ReadonlySet<string>>(new Set())
   const [pastOpen, setPastOpen] = useState(false)
   const [focusDay, setFocusDay] = useState('')
+  const [updateReady, setUpdateReady] = useState(false)
   const settingsDialogRef = useDialogFocus<HTMLElement>(settingsOpen)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -186,6 +187,27 @@ export default function App() {
       window.clearInterval(interval)
     }
   }, [runSync])
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+    if (!navigator.serviceWorker.controller) return
+    const onControllerChange = () => setUpdateReady(true)
+    navigator.serviceWorker.addEventListener(
+      'controllerchange',
+      onControllerChange
+    )
+    const checkUpdate = () =>
+      void navigator.serviceWorker.ready.then((reg) => reg.update())
+    void checkUpdate()
+    const interval = window.setInterval(checkUpdate, 30 * 60_000)
+    return () => {
+      navigator.serviceWorker.removeEventListener(
+        'controllerchange',
+        onControllerChange
+      )
+      window.clearInterval(interval)
+    }
+  }, [])
 
   useEffect(() => {
     if (!tripId || mode !== 'trip') return
@@ -850,6 +872,19 @@ export default function App() {
       </div>
 
       {renderQuickActions('quick-actions tab-nav')}
+
+      {updateReady ? (
+        <div className='update-toast' role='status'>
+          <span>Nueva versión lista</span>
+          <button
+            className='primary-button'
+            type='button'
+            onClick={() => window.location.reload()}
+          >
+            Actualizar
+          </button>
+        </div>
+      ) : null}
 
       {sheetOpen ? (
         <PlanSheet
