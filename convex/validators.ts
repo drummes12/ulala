@@ -20,6 +20,7 @@ export const tripDoc = v.object({
   name: v.string(),
   timezone: v.string(),
   inviteTokenHash: v.string(),
+  inviteCode: v.optional(v.string()),
   inviteCreatedAt: v.number(),
   createdBy: v.union(v.string(), v.null()),
   createdAt: v.number(),

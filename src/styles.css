@@ -1038,6 +1038,35 @@ details.details[open] > summary::before {
 .member-list li {
   color: var(--ink-soft);
 }
+.join-block {
+  margin-top: 1.25rem;
+}
+.join-form {
+  margin-top: 0.8rem;
+}
+.join-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.join-inline label {
+  flex: 1;
+  min-width: 0;
+}
+.join-inline .secondary-button {
+  flex: 0 0 auto;
+}
+.invite-code {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+.invite-code strong {
+  font-size: 1.25rem;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+}
 .sr-only {
   position: absolute;
   width: 1px;

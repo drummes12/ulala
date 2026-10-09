@@ -18,6 +18,7 @@ import {
   Copy,
   FileCsv,
   FlagCheckered,
+  Link,
   MapPin,
   PencilSimple,
   Plus,
@@ -36,6 +37,7 @@ import { ensureUser } from './lib/convexClient'
 import { useDialogFocus } from './lib/useDialogFocus'
 import {
   createTrip,
+  fetchInviteCode,
   getInviteToken,
   getStoredTripId,
   joinTrip,
@@ -102,6 +104,8 @@ export default function App() {
   const [pastOpen, setPastOpen] = useState(false)
   const [focusDay, setFocusDay] = useState('')
   const [updateReady, setUpdateReady] = useState(false)
+  const [joinCode, setJoinCode] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
   const settingsDialogRef = useDialogFocus<HTMLElement>(settingsOpen)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -217,6 +221,13 @@ export default function App() {
     }
   }, [mode, runSync, tripId])
 
+  useEffect(() => {
+    if (!settingsOpen || !trip) return
+    fetchInviteCode(trip.id)
+      .then(setInviteCode)
+      .catch(() => setInviteCode(''))
+  }, [settingsOpen, trip])
+
   async function handleCreate(
     name: string,
     timezone: string,
@@ -261,6 +272,17 @@ export default function App() {
     } finally {
       setBusy(false)
     }
+  }
+
+  function handleJoinByCode(value: string) {
+    const token = extractInviteToken(value)
+    if (!token) {
+      setFormError('Pega un enlace o código de invitación válido.')
+      return
+    }
+    setFormError('')
+    setInviteToken(token)
+    setMode('invite')
   }
 
   async function handleSave(input: PlanInput) {
@@ -347,18 +369,25 @@ export default function App() {
     setNotice('Enlace copiado.')
   }
 
+  async function copyInviteCode() {
+    if (!inviteCode) return
+    await navigator.clipboard.writeText(formatInviteCode(inviteCode))
+    setNotice('Código copiado.')
+  }
+
   async function rotateInvite() {
     if (
       !trip ||
       !window.confirm(
-        'El enlace anterior dejará de aceptar nuevos dispositivos. ¿Regenerarlo?'
+        'El enlace y código anteriores dejarán de aceptar nuevos dispositivos. ¿Regenerarlos?'
       )
     )
       return
-    const token = await regenerateInvite(trip.id)
-    const url = `${location.origin}/#join=${token}`
+    const result = await regenerateInvite(trip.id)
+    setInviteCode(result.inviteCode)
+    const url = `${location.origin}/#join=${result.inviteToken}`
     await navigator.clipboard.writeText(url)
-    setNotice('Nuevo enlace copiado. El anterior quedó revocado.')
+    setNotice('Nuevo enlace y código. Los anteriores quedaron revocados.')
   }
 
   async function installApp() {
@@ -463,6 +492,7 @@ export default function App() {
     return (
       <Onboarding
         onCreate={handleCreate}
+        onJoinInvite={handleJoinByCode}
         loading={busy}
         error={formError || syncMessage}
       />
@@ -984,23 +1014,68 @@ export default function App() {
                 </button>
               </section>
               <section className='settings-block'>
-                <h3>Enlace secreto</h3>
+                <h3>Invitar a este viaje</h3>
                 <p>
-                  Reutilizable para añadir dispositivos. Regenerarlo bloquea
-                  nuevas entradas con el enlace anterior.
+                  Comparte el código corto para entrar desde la app, o el enlace
+                  para quien no la tenga instalada. Regenerar bloquea ambos.
                 </p>
+                {inviteCode ? (
+                  <p className='invite-code'>
+                    Código: <strong>{formatInviteCode(inviteCode)}</strong>
+                  </p>
+                ) : null}
                 <div className='inline-actions'>
                   <button
                     className='primary-button'
+                    onClick={() => void copyInviteCode()}
+                    disabled={!inviteCode}
+                  >
+                    <Copy size={18} /> Copiar código
+                  </button>
+                  <button
+                    className='secondary-button'
                     onClick={() => void copyInvite()}
                   >
-                    <Copy size={18} /> Copiar enlace
+                    <Link size={18} /> Copiar enlace
                   </button>
                   <button
                     className='secondary-button'
                     onClick={() => void rotateInvite()}
                   >
                     <ArrowsClockwise size={18} /> Regenerar
+                  </button>
+                </div>
+              </section>
+              <section className='settings-block'>
+                <h3>Unirse a otro viaje</h3>
+                <p>
+                  Escribe el código corto o pega el enlace de invitación. El
+                  viaje actual queda guardado; para volver necesitarás su
+                  enlace.
+                </p>
+                <div className='join-inline'>
+                  <label>
+                    <span className='sr-only'>
+                      Código o enlace de invitación
+                    </span>
+                    <input
+                      value={joinCode}
+                      onChange={(event) => setJoinCode(event.target.value)}
+                      placeholder='Código o enlace'
+                      autoComplete='off'
+                    />
+                  </label>
+                  <button
+                    className='secondary-button'
+                    type='button'
+                    disabled={!joinCode.trim()}
+                    onClick={() => {
+                      setSettingsOpen(false)
+                      setJoinCode('')
+                      handleJoinByCode(joinCode)
+                    }}
+                  >
+                    Unirme
                   </button>
                 </div>
               </section>
@@ -1456,4 +1531,13 @@ function readInviteToken() {
   const hash = window.location.hash
   if (!hash.startsWith('#join=')) return ''
   return decodeURIComponent(hash.slice(6))
+}
+
+function extractInviteToken(value: string) {
+  const match = value.match(/join=([^\s&#]+)/)
+  return decodeURIComponent(match?.[1] ?? value.trim())
+}
+
+function formatInviteCode(code: string) {
+  return code.replace(/(.{4})(?=.)/g, '$1-')
 }

@@ -60,14 +60,26 @@ export async function getInviteToken(tripId: string) {
   return getMeta<string>(`invite:${tripId}`)
 }
 
-export async function regenerateInvite(tripId: string) {
+export async function fetchInviteCode(tripId: string) {
   const user = await ensureUser()
-  const { inviteToken } = await convex.mutation(api.trips.regenerateInvite, {
+  const result = await convex.mutation(api.trips.inviteCode, {
     userId: user.id,
     tripId: tripId as Id<'trips'>
   })
+  return result.code
+}
+
+export async function regenerateInvite(tripId: string) {
+  const user = await ensureUser()
+  const { inviteToken, inviteCode } = await convex.mutation(
+    api.trips.regenerateInvite,
+    {
+      userId: user.id,
+      tripId: tripId as Id<'trips'>
+    }
+  )
   await setMeta(`invite:${tripId}`, inviteToken)
-  return inviteToken
+  return { inviteToken, inviteCode }
 }
 
 export async function loadLocalTrip(tripId: string) {

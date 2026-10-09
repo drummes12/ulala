@@ -13,13 +13,20 @@ interface OnboardingProps {
     timezone: string,
     displayName?: string
   ) => Promise<void>
+  onJoinInvite: (value: string) => void
   loading: boolean
   error?: string
 }
 
-export function Onboarding({ onCreate, loading, error }: OnboardingProps) {
+export function Onboarding({
+  onCreate,
+  onJoinInvite,
+  loading,
+  error
+}: OnboardingProps) {
   const [name, setName] = useState('')
   const [displayName, setDisplayName] = useState('')
+  const [invite, setInvite] = useState('')
   const [timezone, setTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
   )
@@ -95,6 +102,37 @@ export function Onboarding({ onCreate, loading, error }: OnboardingProps) {
             {loading ? 'Creando…' : 'Crear viaje'}
           </button>
         </form>
+        <details className='details join-block'>
+          <summary>Me invitaron a un viaje</summary>
+          <form
+            className='stack join-form'
+            onSubmit={(event) => {
+              event.preventDefault()
+              onJoinInvite(invite)
+            }}
+          >
+            <label>
+              <span>Código o enlace de invitación</span>
+              <input
+                value={invite}
+                onChange={(event) => setInvite(event.target.value)}
+                placeholder='Ej. K7QM-P3XD'
+                autoComplete='off'
+                autoCapitalize='characters'
+                spellCheck={false}
+              />
+              <small>
+                Pide el código de 8 caracteres o pega el enlace completo.
+              </small>
+            </label>
+            <button
+              className='secondary-button'
+              disabled={loading || !invite.trim()}
+            >
+              Unirme al viaje
+            </button>
+          </form>
+        </details>
       </section>
     </main>
   )

@@ -7,11 +7,14 @@ export default defineSchema({
     name: v.string(),
     timezone: v.string(),
     inviteTokenHash: v.string(),
+    inviteCode: v.optional(v.string()),
     inviteCreatedAt: v.number(),
     createdBy: v.union(v.string(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number()
-  }).index('by_invite', ['inviteTokenHash']),
+  })
+    .index('by_invite', ['inviteTokenHash'])
+    .index('by_invite_code', ['inviteCode']),
 
   tripMembers: defineTable({
     tripId: v.id('trips'),
