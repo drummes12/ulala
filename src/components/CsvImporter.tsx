@@ -3,6 +3,7 @@ import { FileCsv, UploadSimple } from '@phosphor-icons/react'
 import { csvTemplate, parseCsv } from '../lib/csv'
 import { bookingStatusLabel, planStatusLabel } from '../lib/planLabels'
 import type { CsvPlanInput, LocalPlan } from '../types'
+import { useDialogFocus } from '../lib/useDialogFocus'
 
 interface CsvImporterProps {
   existingPlans: LocalPlan[]
@@ -19,6 +20,7 @@ export function CsvImporter({
   const [skipDuplicates, setSkipDuplicates] = useState(true)
   const [importing, setImporting] = useState(false)
   const [error, setError] = useState('')
+  const dialogRef = useDialogFocus<HTMLElement>()
 
   const parsed = useMemo(() => (text.trim() ? parseCsv(text) : null), [text])
   const withDuplicates = useMemo(() => {
@@ -78,8 +80,10 @@ export function CsvImporter({
       className='sheet-backdrop'
       role='presentation'
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      onKeyDown={(event) => event.key === 'Escape' && onClose()}
     >
       <section
+        ref={dialogRef}
         className='sheet csv-sheet'
         role='dialog'
         aria-modal='true'
@@ -98,7 +102,7 @@ export function CsvImporter({
             ×
           </button>
         </header>
-        <div className='stack'>
+        <div className='stack sheet-body'>
           <div className='import-actions'>
             <label className='file-button'>
               <UploadSimple size={18} /> Elegir CSV

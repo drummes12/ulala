@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import { DateTime } from 'luxon'
 import {
   ArrowCounterClockwise,
   ArrowsClockwise,
@@ -9,7 +18,6 @@ import {
   Copy,
   FileCsv,
   FlagCheckered,
-  ListBullets,
   MapPin,
   PencilSimple,
   Plus,
@@ -18,20 +26,14 @@ import {
   Trash,
   Warning
 } from '@phosphor-icons/react'
-import { CsvImporter } from './components/CsvImporter'
 import { JoinScreen } from './components/JoinScreen'
 import { Onboarding } from './components/Onboarding'
 import { PlanSheet } from './components/PlanSheet'
-import {
-  deleteLocalPlan,
-  getMeta,
-  plansForTrip,
-  saveLocalPlan,
-  setMeta
-} from './lib/db'
+import { deleteLocalPlan, getMeta, saveLocalPlan, setMeta } from './lib/db'
 import { enableNotifications, notificationSupport } from './lib/notifications'
 import { bookingStatusLabel, planStatusLabel } from './lib/planLabels'
 import { ensureUser } from './lib/convexClient'
+import { useDialogFocus } from './lib/useDialogFocus'
 import {
   createTrip,
   getInviteToken,
@@ -63,8 +65,18 @@ import type {
   TripRecord
 } from './types'
 
+const CsvImporter = lazy(() =>
+  import('./components/CsvImporter').then(({ CsvImporter }) => ({
+    default: CsvImporter
+  }))
+)
+
 type Mode = 'loading' | 'onboarding' | 'invite' | 'trip'
 type MainView = 'itinerary' | 'reservations'
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
 
 export default function App() {
   const [mode, setMode] = useState<Mode>('loading')
@@ -84,7 +96,17 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [view, setView] = useState<MainView>('itinerary')
   const [notice, setNotice] = useState('')
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent>()
   const [tick, setTick] = useState(0)
+  const [openDays, setOpenDays] = useState<ReadonlySet<string>>(new Set())
+  const [pastOpen, setPastOpen] = useState(false)
+  const [focusDay, setFocusDay] = useState('')
+  const settingsDialogRef = useDialogFocus<HTMLElement>(settingsOpen)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 })
+  }, [view])
 
   const refreshLocal = useCallback(
     async (id = tripId) => {
@@ -137,6 +159,20 @@ export default function App() {
       void runSync(storedTripId)
     })()
   }, [runSync])
+
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault()
+      setInstallPrompt(event as InstallPromptEvent)
+    }
+    const onAppInstalled = () => setInstallPrompt(undefined)
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+    window.addEventListener('appinstalled', onAppInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+      window.removeEventListener('appinstalled', onAppInstalled)
+    }
+  }, [])
 
   useEffect(() => {
     const onOnline = () => void runSync()
@@ -220,7 +256,10 @@ export default function App() {
     void runSync()
   }
 
-  async function updatePlanStatus(plan: LocalPlan, status: PlanStatus) {
+  async function updatePlanFields(
+    plan: LocalPlan,
+    changes: Partial<Pick<PlanInput, 'status' | 'booking_status'>>
+  ) {
     if (!trip) return
     await saveLocalPlan(
       trip.id,
@@ -231,17 +270,29 @@ export default function App() {
         end_time: plan.end_time ?? undefined,
         location: plan.location ?? undefined,
         notes: plan.notes ?? undefined,
-        status,
+        status: plan.status,
         booking_status: plan.booking_status,
         travel_minutes: plan.travel_minutes,
         buffer_minutes: plan.buffer_minutes,
-        reminder_minutes: plan.reminder_minutes
+        reminder_minutes: plan.reminder_minutes,
+        ...changes
       },
       trip.timezone,
       plan
     )
     await refreshLocal()
     void runSync()
+  }
+
+  async function updatePlanStatus(plan: LocalPlan, status: PlanStatus) {
+    await updatePlanFields(plan, { status })
+  }
+
+  async function updateBookingStatus(
+    plan: LocalPlan,
+    booking_status: PlanInput['booking_status']
+  ) {
+    await updatePlanFields(plan, { booking_status })
   }
 
   async function handleConflict(plan: LocalPlan, keepLocal: boolean) {
@@ -288,6 +339,20 @@ export default function App() {
     setNotice('Nuevo enlace copiado. El anterior quedó revocado.')
   }
 
+  async function installApp() {
+    if (!installPrompt) return
+    try {
+      await installPrompt.prompt()
+      const choice = await installPrompt.userChoice
+      setInstallPrompt(undefined)
+      if (choice.outcome === 'accepted') setNotice('Ulala quedó instalada.')
+    } catch {
+      setNotice(
+        'No se pudo abrir la instalación. Prueba desde el menú del navegador.'
+      )
+    }
+  }
+
   async function subscribeNotifications() {
     try {
       await enableNotifications()
@@ -313,6 +378,9 @@ export default function App() {
     [plans, tick, trip?.timezone]
   )
   const grouped = useMemo(() => groupByDay(plans), [plans])
+  const today = DateTime.now()
+    .setZone(trip?.timezone ?? 'UTC')
+    .toISODate()!
   const overlapIds = useMemo(() => {
     const ids = new Set<string>()
     plans.forEach((plan) => {
@@ -337,6 +405,25 @@ export default function App() {
         plan.booking_status === 'none')
   ).length
   const support = notificationSupport()
+  const activeDate = activePlan?.local_date
+  const pastDays = grouped.filter(([date]) => date < today)
+  const upcomingDays = grouped.filter(([date]) => date >= today)
+
+  useEffect(() => {
+    if (!focusDay) return
+    document
+      .getElementById(`day-${focusDay}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [focusDay, openDays, pastOpen])
+
+  function revealDay(date: string) {
+    if (date < today) {
+      setPastOpen(true)
+    } else if (date !== today && date !== activeDate) {
+      setOpenDays((current) => new Set(current).add(date))
+    }
+    setFocusDay(date)
+  }
 
   if (mode === 'loading') {
     return (
@@ -360,8 +447,81 @@ export default function App() {
     )
   }
 
+  const renderDayPlans = (dayPlans: LocalPlan[]) => (
+    <div className='plan-list'>
+      {dayPlans.map((plan) => (
+        <PlanCard
+          key={plan.id}
+          plan={plan}
+          timezone={trip.timezone}
+          overlap={overlapIds.has(plan.id)}
+          onEdit={() => {
+            setEditing(plan)
+            setSheetOpen(true)
+          }}
+          onDelete={() => void handleDelete(plan)}
+          onStatusChange={(status) => void updatePlanStatus(plan, status)}
+        />
+      ))}
+    </div>
+  )
+
+  const renderQuickActions = (className: string) => (
+    <nav className={className} aria-label='Acciones principales'>
+      <button
+        className='primary-button'
+        type='button'
+        onClick={() => {
+          setEditing(undefined)
+          setSheetOpen(true)
+        }}
+      >
+        <span className='quick-action-label'>
+          <Plus size={19} /> Plan
+        </span>
+      </button>
+      <button
+        className={
+          view === 'reservations' ? 'primary-button' : 'secondary-button'
+        }
+        type='button'
+        aria-label={`Reservas${reservationPendingCount ? `, ${reservationPendingCount} pendientes` : ''}`}
+        aria-pressed={view === 'reservations'}
+        onClick={() =>
+          setView(view === 'reservations' ? 'itinerary' : 'reservations')
+        }
+      >
+        <span className='quick-action-label'>
+          <Ticket size={19} /> Reservas
+        </span>
+        {reservationPendingCount > 0 ? (
+          <span className='quick-action-count' aria-hidden='true'>
+            {reservationPendingCount}
+          </span>
+        ) : null}
+      </button>
+      <button
+        className='secondary-button'
+        type='button'
+        onClick={() => setSettingsOpen(true)}
+      >
+        <span className='quick-action-label'>
+          <ShareNetwork size={19} /> Viaje
+        </span>
+      </button>
+    </nav>
+  )
+
   return (
     <main className='app-shell'>
+      <a
+        className='skip-link'
+        href={
+          view === 'reservations' ? '#reservations-title' : '#timeline-title'
+        }
+      >
+        Saltar al contenido
+      </a>
       <header className='app-header'>
         <div>
           <h1>{trip.name}</h1>
@@ -371,6 +531,7 @@ export default function App() {
           type='button'
           onClick={() => void runSync()}
           title={syncMessage || 'Sincronizar ahora'}
+          aria-label={`Sincronización: ${syncLabel(syncState, pendingCount)}. Toca para sincronizar.`}
         >
           <CloudArrowUp
             size={18}
@@ -380,235 +541,315 @@ export default function App() {
         </button>
       </header>
 
-      {notice ? (
-        <p className='notice' role='status'>
-          {notice}
-        </p>
-      ) : null}
-      {syncMessage && syncState === 'error' ? (
-        <p className='notice error' role='alert'>
-          {syncMessage}
-        </p>
-      ) : null}
+      <div className='app-scroll' ref={scrollRef}>
+        {notice ? (
+          <p className='notice' role='status'>
+            {notice}
+          </p>
+        ) : null}
+        {syncMessage && syncState === 'error' ? (
+          <p className='notice error' role='alert'>
+            {syncMessage}
+          </p>
+        ) : null}
 
-      {view === 'itinerary' ? (
-        <section className='next-section' aria-labelledby='next-title'>
-          <div className='section-title'>
-            <h2 id='next-title'>Lo siguiente</h2>
-          </div>
-          {activePlan ? (
-            <article className={`next-card ${activePlan.status}`}>
-              <div className='next-main'>
-                <div className='next-meta'>
-                  <span>
-                    {formatDayLabel(activePlan.local_date, trip.timezone)}
-                  </span>
-                  <span className='next-flags'>
-                    {activePlan.booking_status !== 'none' &&
-                    activePlan.booking_status !== 'not_required' ? (
-                      <span
-                        className={`booking-pill ${activePlan.booking_status}`}
-                      >
-                        {bookingStatusLabel(activePlan.booking_status)}
-                      </span>
-                    ) : null}
-                    <span className={`next-status ${activePlan.status}`}>
-                      {planStatusLabel(activePlan.status)}
+        {view === 'itinerary' ? (
+          <section className='next-section' aria-labelledby='next-title'>
+            <div className='section-title'>
+              <h2 id='next-title'>
+                {activePlan?.status === 'idea'
+                  ? 'Siguiente opción · aún sin confirmar'
+                  : 'Próximo compromiso'}
+              </h2>
+            </div>
+            {activePlan ? (
+              <article className={`next-card ${activePlan.status}`}>
+                <div className='next-main'>
+                  <div className='next-meta'>
+                    <span>
+                      {formatDayLabel(activePlan.local_date, trip.timezone)}
                     </span>
-                  </span>
-                </div>
-                <h3>{activePlan.title}</h3>
-                <p className='next-time'>
-                  {formatPlanTime(activePlan, trip.timezone)}
-                </p>
-                {activePlan.location ? (
-                  <p className='meta-line'>
-                    <MapPin size={17} /> {activePlan.location}
+                    <span className='next-flags'>
+                      {activePlan.booking_status !== 'none' &&
+                      activePlan.booking_status !== 'not_required' ? (
+                        <span
+                          className={`booking-pill ${activePlan.booking_status}`}
+                        >
+                          {bookingStatusLabel(activePlan.booking_status)}
+                        </span>
+                      ) : null}
+                      <span className={`next-status ${activePlan.status}`}>
+                        {planStatusLabel(activePlan.status)}
+                      </span>
+                    </span>
+                  </div>
+                  <h3>{activePlan.title}</h3>
+                  <p className='next-time'>
+                    {formatPlanTime(activePlan, trip.timezone)}
                   </p>
-                ) : null}
-              </div>
-              <div className='leave-box'>
-                <span>{relativeTiming(activePlan, trip.timezone)}</span>
-                <strong>
-                  Salir{' '}
-                  {utcToTripTime(
-                    leaveAtIso(activePlan),
-                    trip.timezone
-                  ).toFormat('HH:mm')}
-                </strong>
-                <small>
-                  {activePlan.travel_minutes + activePlan.buffer_minutes > 0
-                    ? `${activePlan.travel_minutes + activePlan.buffer_minutes} min de traslado + margen`
-                    : 'Sin traslado ni margen'}
-                </small>
-              </div>
-              <div className='next-actions'>
-                {activePlan.status === 'confirmed' ? (
-                  <>
+                  {activePlan.location ? (
+                    <a
+                      className='meta-line location-link'
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(activePlan.location)}`}
+                      target='_blank'
+                      rel='noreferrer'
+                    >
+                      <MapPin size={17} /> {activePlan.location}
+                    </a>
+                  ) : null}
+                  {activePlan.notes ? (
+                    <details className='notes next-notes'>
+                      <summary>Notas y detalles</summary>
+                      <p>{activePlan.notes}</p>
+                    </details>
+                  ) : null}
+                </div>
+                <div className='leave-box'>
+                  <span>{relativeTiming(activePlan, trip.timezone)}</span>
+                  {activePlan.travel_minutes + activePlan.buffer_minutes > 0 ? (
+                    <>
+                      <strong>
+                        {relativeTiming(activePlan, trip.timezone) === 'Sal ya'
+                          ? 'Salir ahora'
+                          : `Salir ${utcToTripTime(
+                              leaveAtIso(activePlan),
+                              trip.timezone
+                            ).toFormat('HH:mm')}`}
+                      </strong>
+                      <small>
+                        {activePlan.travel_minutes > 0
+                          ? `${activePlan.travel_minutes} min de traslado`
+                          : ''}
+                        {activePlan.travel_minutes > 0 &&
+                        activePlan.buffer_minutes > 0
+                          ? ' + '
+                          : ''}
+                        {activePlan.buffer_minutes > 0
+                          ? `${activePlan.buffer_minutes} min de margen`
+                          : ''}
+                      </small>
+                    </>
+                  ) : (
+                    <strong>
+                      {formatPlanTime(activePlan, trip.timezone)} · hora del
+                      plan
+                    </strong>
+                  )}
+                </div>
+                <div className='next-actions'>
+                  {activePlan.status === 'confirmed' ? (
                     <button
                       className='next-action primary'
                       type='button'
+                      title='Marcar como realizado'
                       onClick={() => void updatePlanStatus(activePlan, 'done')}
                     >
                       <FlagCheckered size={17} weight='fill' /> Marcar hecho
                     </button>
+                  ) : (
                     <button
-                      className='next-action'
+                      className='next-action primary'
                       type='button'
+                      title='Convertir la idea en un compromiso del viaje'
+                      onClick={() =>
+                        void updatePlanStatus(activePlan, 'confirmed')
+                      }
+                    >
+                      <CheckCircle size={17} /> Confirmar plan
+                    </button>
+                  )}
+                  <button
+                    className='next-action'
+                    type='button'
+                    onClick={() => {
+                      setEditing(activePlan)
+                      setSheetOpen(true)
+                    }}
+                  >
+                    <PencilSimple size={17} /> Editar
+                  </button>
+                  {activePlan.status === 'confirmed' ? (
+                    <button
+                      className='next-action quiet'
+                      type='button'
+                      title='Quita la confirmación: el plan vuelve a ser una propuesta opcional'
                       onClick={() => void updatePlanStatus(activePlan, 'idea')}
                     >
                       <Circle size={17} /> Volver a idea
                     </button>
-                  </>
-                ) : (
+                  ) : null}
+                </div>
+              </article>
+            ) : (
+              <div className='empty-state'>
+                <h3>Sin planes pendientes</h3>
+                <p>Añade un plan o importa el itinerario desde CSV.</p>
+                <div className='inline-actions empty-actions'>
                   <button
-                    className='next-action primary'
+                    className='primary-button'
                     type='button'
-                    onClick={() =>
-                      void updatePlanStatus(activePlan, 'confirmed')
-                    }
+                    onClick={() => {
+                      setEditing(undefined)
+                      setSheetOpen(true)
+                    }}
                   >
-                    <CheckCircle size={17} /> Confirmar
+                    <Plus size={18} /> Añadir plan
                   </button>
-                )}
-                <button
-                  className='next-action'
-                  type='button'
-                  onClick={() => {
-                    setEditing(activePlan)
-                    setSheetOpen(true)
-                  }}
-                >
-                  <PencilSimple size={17} /> Editar
-                </button>
+                  <button
+                    className='secondary-button'
+                    type='button'
+                    onClick={() => setCsvOpen(true)}
+                  >
+                    <FileCsv size={18} /> Importar CSV
+                  </button>
+                </div>
               </div>
-            </article>
-          ) : (
-            <div className='empty-state'>
-              <h3>Sin planes pendientes</h3>
-              <p>Añade el primer plan o importa el itinerario desde Excel.</p>
+            )}
+          </section>
+        ) : null}
+
+        {renderQuickActions('quick-actions inline-nav')}
+
+        {conflicts.length ? (
+          <section className='conflict-panel' aria-labelledby='conflict-title'>
+            <h2 id='conflict-title'>
+              <Warning size={19} /> Cambios que coinciden
+            </h2>
+            {conflicts.map((plan) => (
+              <article key={plan.id} className='conflict-card'>
+                <div>
+                  <strong>{plan.title}</strong>
+                  <p>
+                    Otro dispositivo cambió este plan a{' '}
+                    {plan.conflict_remote?.start_time?.slice(0, 5)}.
+                  </p>
+                </div>
+                <div className='inline-actions'>
+                  <button
+                    className='secondary-button'
+                    onClick={() => void handleConflict(plan, false)}
+                  >
+                    Usar remoto
+                  </button>
+                  <button
+                    className='primary-button'
+                    onClick={() => void handleConflict(plan, true)}
+                  >
+                    Conservar mío
+                  </button>
+                </div>
+              </article>
+            ))}
+          </section>
+        ) : null}
+
+        {view === 'reservations' ? (
+          <ReservationsView
+            plans={plans}
+            timezone={trip.timezone}
+            onBookingChange={updateBookingStatus}
+            onEdit={(plan) => {
+              setEditing(plan)
+              setSheetOpen(true)
+            }}
+          />
+        ) : (
+          <section className='timeline' aria-labelledby='timeline-title'>
+            <div className='section-title'>
+              <h2 id='timeline-title' tabIndex={-1}>
+                Día por día
+              </h2>
             </div>
-          )}
-        </section>
-      ) : null}
-
-      <nav className='quick-actions' aria-label='Acciones principales'>
-        <button
-          className='primary-button'
-          onClick={() => {
-            setEditing(undefined)
-            setSheetOpen(true)
-          }}
-        >
-          <Plus size={19} /> Plan
-        </button>
-        <button
-          className={
-            view === 'reservations' ? 'primary-button' : 'secondary-button'
-          }
-          aria-pressed={view === 'reservations'}
-          onClick={() =>
-            setView(view === 'reservations' ? 'itinerary' : 'reservations')
-          }
-        >
-          <Ticket size={19} /> Reservas
-          {reservationPendingCount > 0 ? ` · ${reservationPendingCount}` : ''}
-        </button>
-        <button className='secondary-button' onClick={() => setCsvOpen(true)}>
-          <FileCsv size={19} /> CSV
-        </button>
-        <button
-          className='secondary-button'
-          onClick={() => setSettingsOpen(true)}
-        >
-          <ShareNetwork size={19} /> Viaje
-        </button>
-      </nav>
-
-      {conflicts.length ? (
-        <section className='conflict-panel' aria-labelledby='conflict-title'>
-          <h2 id='conflict-title'>
-            <Warning size={19} /> Cambios que coinciden
-          </h2>
-          {conflicts.map((plan) => (
-            <article key={plan.id} className='conflict-card'>
-              <div>
-                <strong>{plan.title}</strong>
-                <p>
-                  Otro dispositivo cambió este plan a{' '}
-                  {plan.conflict_remote?.start_time?.slice(0, 5)}.
-                </p>
-              </div>
-              <div className='inline-actions'>
+            {grouped.length ? (
+              <>
+                <DayNav
+                  days={grouped}
+                  today={today}
+                  activeDate={activeDate}
+                  timezone={trip.timezone}
+                  onSelect={revealDay}
+                />
+                {pastDays.length ? (
+                  <details
+                    className='past-days'
+                    open={pastOpen}
+                    onToggle={(event) => setPastOpen(event.currentTarget.open)}
+                  >
+                    <summary>
+                      <span>Días anteriores</span>
+                      <small>
+                        {pastDays.length}{' '}
+                        {pastDays.length === 1 ? 'día' : 'días'}
+                      </small>
+                    </summary>
+                    {pastDays.map(([date, dayPlans]) => (
+                      <section
+                        className='day-group past'
+                        id={`day-${date}`}
+                        key={date}
+                      >
+                        <h3>{formatDayLabel(date, trip.timezone)}</h3>
+                        {renderDayPlans(dayPlans)}
+                      </section>
+                    ))}
+                  </details>
+                ) : null}
+                {upcomingDays.map(([date, dayPlans]) => {
+                  const title = formatDayLabel(date, trip.timezone)
+                  const expanded = date === today || date === activeDate
+                  const count = `${dayPlans.length} ${dayPlans.length === 1 ? 'plan' : 'planes'}`
+                  return expanded ? (
+                    <section
+                      className='day-group'
+                      id={`day-${date}`}
+                      key={date}
+                    >
+                      <h3>{title}</h3>
+                      {renderDayPlans(dayPlans)}
+                    </section>
+                  ) : (
+                    <details
+                      className='day-group collapsed-day'
+                      id={`day-${date}`}
+                      key={date}
+                      open={openDays.has(date)}
+                      onToggle={(event) => {
+                        const open = event.currentTarget.open
+                        setOpenDays((current) => {
+                          const next = new Set(current)
+                          if (open) next.add(date)
+                          else next.delete(date)
+                          return next
+                        })
+                      }}
+                    >
+                      <summary>
+                        <span>{title}</span>
+                        <small>{count}</small>
+                      </summary>
+                      {renderDayPlans(dayPlans)}
+                    </details>
+                  )
+                })}
+              </>
+            ) : (
+              <div className='empty-state'>
+                <h3>Todavía no hay planes</h3>
+                <p>Crea uno manualmente o importa filas desde un CSV.</p>
                 <button
                   className='secondary-button'
-                  onClick={() => void handleConflict(plan, false)}
+                  type='button'
+                  onClick={() => setCsvOpen(true)}
                 >
-                  Usar remoto
-                </button>
-                <button
-                  className='primary-button'
-                  onClick={() => void handleConflict(plan, true)}
-                >
-                  Conservar mío
+                  <FileCsv size={18} /> Importar CSV
                 </button>
               </div>
-            </article>
-          ))}
-        </section>
-      ) : null}
+            )}
+          </section>
+        )}
+      </div>
 
-      {view === 'reservations' ? (
-        <ReservationsView
-          plans={plans}
-          timezone={trip.timezone}
-          onBack={() => setView('itinerary')}
-          onEdit={(plan) => {
-            setEditing(plan)
-            setSheetOpen(true)
-          }}
-        />
-      ) : (
-        <section className='timeline' aria-labelledby='timeline-title'>
-          <div className='section-title'>
-            <h2 id='timeline-title'>Día por día</h2>
-          </div>
-          {grouped.length ? (
-            grouped.map(([date, dayPlans]) => (
-              <section
-                className='day-group'
-                key={date}
-                aria-label={formatDayLabel(date, trip.timezone)}
-              >
-                <h3>{formatDayLabel(date, trip.timezone)}</h3>
-                <div className='plan-list'>
-                  {dayPlans.map((plan) => (
-                    <PlanCard
-                      key={plan.id}
-                      plan={plan}
-                      timezone={trip.timezone}
-                      overlap={overlapIds.has(plan.id)}
-                      onEdit={() => {
-                        setEditing(plan)
-                        setSheetOpen(true)
-                      }}
-                      onDelete={() => void handleDelete(plan)}
-                      onStatusChange={(status) =>
-                        void updatePlanStatus(plan, status)
-                      }
-                    />
-                  ))}
-                </div>
-              </section>
-            ))
-          ) : (
-            <div className='empty-state'>
-              <h3>Todavía no hay planes</h3>
-              <p>Crea uno manualmente o importa filas desde un CSV.</p>
-            </div>
-          )}
-        </section>
-      )}
+      {renderQuickActions('quick-actions tab-nav')}
 
       {sheetOpen ? (
         <PlanSheet
@@ -622,11 +863,19 @@ export default function App() {
         />
       ) : null}
       {csvOpen ? (
-        <CsvImporter
-          existingPlans={plans}
-          onClose={() => setCsvOpen(false)}
-          onImport={importPlans}
-        />
+        <Suspense
+          fallback={
+            <p className='notice' role='status'>
+              Abriendo importador…
+            </p>
+          }
+        >
+          <CsvImporter
+            existingPlans={plans}
+            onClose={() => setCsvOpen(false)}
+            onImport={importPlans}
+          />
+        </Suspense>
       ) : null}
       {settingsOpen ? (
         <div
@@ -635,8 +884,12 @@ export default function App() {
           onMouseDown={(event) =>
             event.target === event.currentTarget && setSettingsOpen(false)
           }
+          onKeyDown={(event) =>
+            event.key === 'Escape' && setSettingsOpen(false)
+          }
         >
           <section
+            ref={settingsDialogRef}
             className='sheet'
             role='dialog'
             aria-modal='true'
@@ -644,7 +897,7 @@ export default function App() {
           >
             <header className='sheet-header'>
               <div>
-                <h2 id='trip-settings-title'>Compartir y avisos</h2>
+                <h2 id='trip-settings-title'>Ajustes del viaje</h2>
               </div>
               <button
                 className='icon-button'
@@ -655,7 +908,46 @@ export default function App() {
                 ×
               </button>
             </header>
-            <div className='stack'>
+            <div className='stack sheet-body'>
+              <section className='settings-block'>
+                <h3>Instalar Ulala</h3>
+                {installPrompt ? (
+                  <button
+                    className='secondary-button'
+                    type='button'
+                    onClick={() => void installApp()}
+                  >
+                    Instalar app
+                  </button>
+                ) : support.isIos && !support.isStandalone ? (
+                  <p>
+                    En iPhone o iPad: Compartir → “Añadir a pantalla de inicio”.
+                  </p>
+                ) : support.isStandalone ? (
+                  <p className='helper'>
+                    Ulala está abierta como app instalada.
+                  </p>
+                ) : (
+                  <p>
+                    Si el navegador lo permite, instala Ulala desde su menú para
+                    abrirla como app.
+                  </p>
+                )}
+              </section>
+              <section className='settings-block'>
+                <h3>Importar itinerario</h3>
+                <p>Añade o actualiza planes desde una hoja de cálculo CSV.</p>
+                <button
+                  className='secondary-button'
+                  type='button'
+                  onClick={() => {
+                    setSettingsOpen(false)
+                    setCsvOpen(true)
+                  }}
+                >
+                  <FileCsv size={18} /> Importar CSV
+                </button>
+              </section>
               <section className='settings-block'>
                 <h3>Enlace secreto</h3>
                 <p>
@@ -757,14 +1049,14 @@ function PlanCard({
       <div className='plan-content'>
         <div className='plan-heading'>
           <h4>{plan.title}</h4>
-          <span
-            className={`dot ${plan.status}`}
-            aria-label={planStatusLabel(plan.status)}
-          />
+          <span className={`dot ${plan.status}`} aria-hidden='true' />
         </div>
         <div className='plan-flags'>
           {plan.status === 'idea' ? (
             <span className='flag idea'>Idea</span>
+          ) : null}
+          {plan.status === 'confirmed' ? (
+            <span className='flag confirmed'>Confirmado</span>
           ) : null}
           {done ? <span className='flag done'>Hecho</span> : null}
           {plan.booking_status !== 'none' &&
@@ -779,9 +1071,14 @@ function PlanCard({
           {formatPlanTime(plan, timezone)}
         </p>
         {plan.location ? (
-          <p className='meta-line'>
+          <a
+            className='meta-line location-link'
+            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(plan.location)}`}
+            target='_blank'
+            rel='noreferrer'
+          >
             <MapPin size={16} /> {plan.location}
-          </p>
+          </a>
         ) : null}
         {overlap && !done ? (
           <p className='warning-line'>
@@ -878,12 +1175,15 @@ const RESERVATION_GROUPS: {
 function ReservationsView({
   plans,
   timezone,
-  onBack,
+  onBookingChange,
   onEdit
 }: {
   plans: LocalPlan[]
   timezone: string
-  onBack: () => void
+  onBookingChange: (
+    plan: LocalPlan,
+    status: PlanInput['booking_status']
+  ) => void
   onEdit: (plan: LocalPlan) => void
 }) {
   const groups = RESERVATION_GROUPS.map((group) => ({
@@ -895,14 +1195,30 @@ function ReservationsView({
   const total = groups.reduce((sum, group) => sum + group.items.length, 0)
   const pending =
     groups[0].items.length + groups[1].items.length + groups[2].items.length
+  const initialOpenGroup = groups.find((group) => group.items.length > 0)?.key
+  const [expandedGroup, setExpandedGroup] = useState<
+    string | null | undefined
+  >()
+  const openGroupKey =
+    expandedGroup === undefined ? initialOpenGroup : expandedGroup
+
+  function changeBookingStatus(
+    plan: LocalPlan,
+    status: PlanInput['booking_status']
+  ) {
+    const group = RESERVATION_GROUPS.find((candidate) =>
+      candidate.match({ ...plan, booking_status: status })
+    )
+    setExpandedGroup(group?.key ?? null)
+    void onBookingChange(plan, status)
+  }
 
   return (
     <section className='reservations' aria-labelledby='reservations-title'>
       <div className='section-title'>
-        <h2 id='reservations-title'>Reservas</h2>
-        <button className='secondary-button' onClick={onBack}>
-          <ListBullets size={18} /> Itinerario
-        </button>
+        <h2 id='reservations-title' tabIndex={-1}>
+          Reservas
+        </h2>
       </div>
       <p className='reservation-summary'>
         {pending
@@ -920,77 +1236,166 @@ function ReservationsView({
         groups.map(
           (group) =>
             group.items.length > 0 && (
-              <section
+              <details
                 className={`reservation-group ${group.key}`}
                 key={group.key}
-                aria-label={group.title}
+                open={openGroupKey === group.key}
+                onToggle={(event) => {
+                  if (event.currentTarget.open) setExpandedGroup(group.key)
+                  else if (openGroupKey === group.key) setExpandedGroup(null)
+                }}
               >
-                <h3>
+                <summary>
                   {group.title}
                   <span className='count'>{group.items.length}</span>
-                </h3>
-                <p className='helper'>{group.description}</p>
-                <div className='plan-list'>
-                  {group.items.map((plan) => (
-                    <article
-                      className={`reservation-card ${group.key} ${plan.dirty ? 'pending' : ''}`}
-                      key={plan.id}
-                    >
-                      <div className='plan-content'>
-                        <div className='plan-heading'>
-                          <h4>{plan.title}</h4>
-                          <span
-                            className={`dot ${plan.status}`}
-                            aria-label={planStatusLabel(plan.status)}
-                          />
-                        </div>
-                        <div className='plan-flags'>
-                          {plan.status === 'idea' ? (
-                            <span className='flag idea'>Idea</span>
-                          ) : null}
-                          <span
-                            className={`flag booking ${plan.booking_status}`}
-                          >
-                            {bookingStatusLabel(plan.booking_status)}
-                          </span>
-                        </div>
-                        <p className='meta-line'>
-                          {formatDayLabel(plan.local_date, timezone)} ·{' '}
-                          {plan.start_time.slice(0, 5)}
-                          {plan.end_time ? `–${plan.end_time.slice(0, 5)}` : ''}
-                        </p>
-                        {plan.location ? (
+                </summary>
+                <div className='reservation-items'>
+                  <p className='helper'>{group.description}</p>
+                  <div className='plan-list'>
+                    {group.items.map((plan) => (
+                      <article
+                        className={`reservation-card ${group.key} ${plan.dirty ? 'pending' : ''}`}
+                        key={plan.id}
+                      >
+                        <div className='plan-content'>
+                          <div className='plan-heading'>
+                            <h4>{plan.title}</h4>
+                            <span
+                              className={`dot ${plan.status}`}
+                              aria-hidden='true'
+                            />
+                          </div>
+                          <div className='plan-flags'>
+                            {plan.status === 'idea' ? (
+                              <span className='flag idea'>Idea</span>
+                            ) : null}
+                            {plan.status === 'confirmed' ? (
+                              <span className='flag confirmed'>Confirmado</span>
+                            ) : null}
+                            <span
+                              className={`flag booking ${plan.booking_status}`}
+                            >
+                              {bookingStatusLabel(plan.booking_status)}
+                            </span>
+                          </div>
                           <p className='meta-line'>
-                            <MapPin size={16} /> {plan.location}
+                            {formatDayLabel(plan.local_date, timezone)} ·{' '}
+                            {plan.start_time.slice(0, 5)}
+                            {plan.end_time
+                              ? `–${plan.end_time.slice(0, 5)}`
+                              : ''}
                           </p>
-                        ) : null}
-                        {plan.notes ? (
-                          <details className='notes'>
-                            <summary>Notas</summary>
-                            <p>{plan.notes}</p>
-                          </details>
-                        ) : null}
-                        {plan.dirty ? (
-                          <p className='helper'>Pendiente de sincronizar</p>
-                        ) : null}
-                      </div>
-                      <div className='card-actions'>
-                        <button
-                          className='icon-button'
-                          onClick={() => onEdit(plan)}
-                          aria-label={`Gestionar ${plan.title}`}
-                        >
-                          <PencilSimple size={20} />
-                        </button>
-                      </div>
-                    </article>
-                  ))}
+                          {plan.location ? (
+                            <a
+                              className='meta-line location-link'
+                              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(plan.location)}`}
+                              target='_blank'
+                              rel='noreferrer'
+                            >
+                              <MapPin size={16} /> {plan.location}
+                            </a>
+                          ) : null}
+                          {plan.notes ? (
+                            <details className='notes'>
+                              <summary>Notas</summary>
+                              <p>{plan.notes}</p>
+                            </details>
+                          ) : null}
+                          {plan.dirty ? (
+                            <p className='helper'>Pendiente de sincronizar</p>
+                          ) : null}
+                        </div>
+                        <div className='reservation-actions'>
+                          <label className='booking-control'>
+                            <span className='sr-only'>
+                              Estado de reserva para {plan.title}
+                            </span>
+                            <select
+                              value={plan.booking_status}
+                              onChange={(event) =>
+                                changeBookingStatus(
+                                  plan,
+                                  event.target
+                                    .value as PlanInput['booking_status']
+                                )
+                              }
+                            >
+                              <option value='none'>Por decidir</option>
+                              <option value='not_required'>
+                                No hace falta
+                              </option>
+                              <option value='recommended'>Recomendada</option>
+                              <option value='required'>Por reservar</option>
+                              <option value='booked'>Reservada</option>
+                            </select>
+                          </label>
+                          <button
+                            className='icon-button'
+                            onClick={() => onEdit(plan)}
+                            aria-label={`Editar ${plan.title}`}
+                          >
+                            <PencilSimple size={20} />
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </div>
-              </section>
+              </details>
             )
         )
       )}
     </section>
+  )
+}
+
+function DayNav({
+  days,
+  today,
+  activeDate,
+  timezone,
+  onSelect
+}: {
+  days: [string, LocalPlan[]][]
+  today: string
+  activeDate?: string
+  timezone: string
+  onSelect: (date: string) => void
+}) {
+  const currentRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    currentRef.current?.scrollIntoView({ block: 'nearest', inline: 'center' })
+  }, [])
+  const dates = new Set(days.map(([date]) => date))
+  const focusDate = dates.has(today)
+    ? today
+    : activeDate && dates.has(activeDate)
+      ? activeDate
+      : undefined
+  return (
+    <div className='day-nav' role='group' aria-label='Días del viaje'>
+      {days.map(([date, dayPlans]) => {
+        const day = DateTime.fromISO(date, { zone: timezone }).setLocale('es')
+        const isToday = date === today
+        return (
+          <button
+            key={date}
+            ref={date === focusDate ? currentRef : undefined}
+            type='button'
+            className={`day-chip${date < today ? ' past' : ''}${isToday ? ' today' : ''}${date === activeDate ? ' next' : ''}`}
+            aria-label={formatDayLabel(date, timezone)}
+            aria-current={isToday ? 'date' : undefined}
+            onClick={() => onSelect(date)}
+          >
+            <span className='day-chip-dow'>{day.weekdayShort}</span>
+            <span className='day-chip-num'>{day.toFormat('d')}</span>
+            {dayPlans.some((plan) => plan.status === 'confirmed') ? (
+              <span className='day-chip-dot' aria-hidden='true' />
+            ) : null}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -1006,8 +1411,8 @@ function groupByDay(plans: LocalPlan[]) {
 
 function syncLabel(state: SyncState, pending: number) {
   if (state === 'syncing') return 'Sincronizando'
-  if (state === 'offline') return 'Offline'
-  if (pending) return `${pending} pendiente${pending === 1 ? '' : 's'}`
+  if (pending) return `${pending} sin sincronizar`
+  if (state === 'offline') return 'Sin conexión'
   if (state === 'error') return 'Reintentar'
   return 'Al día'
 }

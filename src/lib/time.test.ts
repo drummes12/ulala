@@ -6,6 +6,7 @@ import {
   localToUtcIso,
   nextRelevantPlan,
   plansOverlap,
+  relativeTiming,
   timezoneDifferenceLabel,
   timezoneOffsetLabel,
   timezoneOptions,
@@ -103,6 +104,54 @@ describe('time utilities', () => {
       end_time: null
     }
     expect(nextRelevantPlan([done, next], 'UTC')?.id).toBe('next')
+  })
+
+  it('prefers the next confirmed plan over an earlier idea', () => {
+    const idea = {
+      ...localPlan,
+      id: 'idea',
+      status: 'idea' as const,
+      start_at: DateTime.utc().plus({ hours: 1 }).toISO()!,
+      end_time: null
+    }
+    const confirmed = {
+      ...localPlan,
+      id: 'confirmed',
+      start_at: DateTime.utc().plus({ hours: 2 }).toISO()!,
+      end_time: null
+    }
+    expect(nextRelevantPlan([idea, confirmed], 'UTC')?.id).toBe('confirmed')
+  })
+
+  it('marks elapsed plans as past instead of showing a countdown', () => {
+    expect(
+      relativeTiming(basePlan, 'America/Mexico_City', '2026-12-20T18:00:00Z')
+    ).toBe('Ya pasó')
+  })
+
+  it('shows when departure is due without treating zero travel as a departure', () => {
+    expect(
+      relativeTiming(basePlan, 'America/Mexico_City', '2026-12-20T15:15:00Z')
+    ).toBe('Sal en 5 min')
+    expect(
+      relativeTiming(
+        { ...basePlan, travel_minutes: 0, buffer_minutes: 0 },
+        'America/Mexico_City',
+        '2026-12-20T15:55:00Z'
+      )
+    ).toBe('En 5 min')
+  })
+
+  it('keeps overnight plans active until their local end time', () => {
+    const overnight = {
+      ...basePlan,
+      start_time: '22:00',
+      end_time: '01:00',
+      start_at: '2026-12-20T22:00:00.000Z'
+    }
+    expect(relativeTiming(overnight, 'UTC', '2026-12-20T23:00:00Z')).toBe(
+      'En curso'
+    )
   })
 
   it('keeps booking_status through inputToPlan', () => {

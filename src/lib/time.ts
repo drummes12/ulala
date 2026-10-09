@@ -77,19 +77,16 @@ export function relativeTiming(
   const now = DateTime.fromISO(nowIso)
   const start = DateTime.fromISO(plan.start_at)
   const leaveAt = DateTime.fromISO(leaveAtIso(plan))
-  const end = plan.end_time
-    ? utcToTripTime(plan.start_at, timezone)
-        .set({
-          hour: Number(plan.end_time.slice(0, 2)),
-          minute: Number(plan.end_time.slice(3, 5))
-        })
-        .toUTC()
-    : null
+  const end = endAt(plan, timezone) ?? start.plus({ hours: 2 })
 
-  if (end && now >= start && now <= end) return 'En curso'
-  if (now >= start && (!end || now <= end)) return 'Ahora'
-  if (now < leaveAt && leaveAt.diff(now, 'minutes').minutes <= 15)
-    return 'Sal ya'
+  if (now > end) return 'Ya pasó'
+  if (now >= start) return 'En curso'
+  if (plan.travel_minutes + plan.buffer_minutes > 0) {
+    if (now >= leaveAt) return 'Sal ya'
+    const minutesToLeave = leaveAt.diff(now, 'minutes').minutes
+    if (minutesToLeave <= 15)
+      return `Sal en ${Math.max(1, Math.floor(minutesToLeave))} min`
+  }
   const minutes = Math.floor(start.diff(now, 'minutes').minutes)
   if (minutes < 60) return `En ${Math.max(minutes, 1)} min`
   const hours = Math.floor(minutes / 60)
@@ -101,25 +98,18 @@ export function nextRelevantPlan(
   plans: LocalPlan[],
   timezone: string
 ): LocalPlan | undefined {
-  const now = DateTime.now().setZone('utc')
-  return plans
+  const now = DateTime.utc()
+  const relevant = plans
     .filter(
       (plan) =>
         !plan.pending_delete && !plan.deleted_at && plan.status !== 'done'
     )
-    .sort((a, b) => a.start_at.localeCompare(b.start_at))
-    .find((plan) => {
+    .filter((plan) => {
       const start = DateTime.fromISO(plan.start_at)
-      const end = plan.end_time
-        ? utcToTripTime(plan.start_at, timezone)
-            .set({
-              hour: Number(plan.end_time.slice(0, 2)),
-              minute: Number(plan.end_time.slice(3, 5))
-            })
-            .toUTC()
-        : start.plus({ hours: 2 })
-      return now <= end
+      return now <= (endAt(plan, timezone) ?? start.plus({ hours: 2 }))
     })
+    .sort((a, b) => a.start_at.localeCompare(b.start_at))
+  return relevant.find((plan) => plan.status === 'confirmed') ?? relevant[0]
 }
 
 export function plansOverlap(
@@ -137,9 +127,11 @@ export function plansOverlap(
 
 function endAt(plan: PlanRecord, timezone: string): DateTime | null {
   if (!plan.end_time) return null
-  const day = utcToTripTime(plan.start_at, timezone)
+  const start = utcToTripTime(plan.start_at, timezone)
   const [hour, minute] = plan.end_time.split(':').map(Number)
-  return day.set({ hour, minute }).toUTC()
+  let end = start.set({ hour, minute })
+  if (end <= start) end = end.plus({ days: 1 })
+  return end.toUTC()
 }
 
 export function timezoneOptions(): string[] {

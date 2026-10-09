@@ -23,6 +23,7 @@
 html {
   min-height: 100%;
   scrollbar-color: #bdb8aa var(--paper);
+  -webkit-tap-highlight-color: transparent;
 }
 ::selection {
   background: var(--accent-soft);
@@ -43,8 +44,27 @@ textarea,
 select {
   font: inherit;
 }
+button,
+a {
+  touch-action: manipulation;
+}
+button,
+[role='button'] {
+  user-select: none;
+  -webkit-user-select: none;
+}
 button {
   cursor: pointer;
+}
+summary {
+  list-style: none;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+button:active,
+a:active {
+  opacity: 0.8;
 }
 button:disabled {
   cursor: not-allowed;
@@ -68,9 +88,19 @@ input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 button:focus-visible,
+a:focus-visible,
 summary:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--focus) 35%, transparent);
   outline-offset: 2px;
+}
+#timeline-title,
+#reservations-title {
+  scroll-margin-top: 1rem;
+}
+#timeline-title:focus,
+#reservations-title:focus {
+  outline: 3px solid color-mix(in srgb, var(--focus) 35%, transparent);
+  outline-offset: 4px;
 }
 label {
   display: grid;
@@ -167,6 +197,20 @@ code {
   font-size: 0.9rem;
 }
 
+.skip-link {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 50;
+  transform: translateY(-160%);
+  border-radius: 10px;
+  background: var(--ink);
+  color: #fff;
+  padding: 0.7rem 0.9rem;
+}
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
 .shell,
 .app-shell {
   width: min(100%, 760px);
@@ -257,7 +301,7 @@ h4 {
 .file-button {
   min-height: 44px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -282,11 +326,6 @@ h4 {
   color: var(--ink-soft);
   background: transparent;
   font-size: 1.45rem;
-}
-.icon-button:hover,
-.secondary-button:hover,
-.file-button:hover {
-  background: #efede7;
 }
 .icon-button.danger {
   color: var(--danger);
@@ -436,9 +475,10 @@ h4 {
   gap: 0.5rem;
 }
 .next-action {
-  height: 40px;
+  height: 44px;
+  min-width: 44px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 12px;
   background: transparent;
   color: var(--ink);
   display: inline-grid;
@@ -459,18 +499,41 @@ h4 {
   background: var(--accent);
   color: #fff;
 }
-.next-action:hover {
+.next-action.quiet {
+  border-style: dashed;
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+.next-action:active,
+.icon-button:active,
+.secondary-button:active,
+.file-button:active {
   background: #efede7;
 }
-.next-action.primary:hover {
+.next-action.primary:active {
   background: #254b3d;
 }
 .meta-line {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.35rem;
+  min-width: 0;
   color: var(--ink-soft);
   margin-bottom: 0.35rem;
+}
+.meta-line svg {
+  flex: 0 0 auto;
+}
+.location-link {
+  width: fit-content;
+  max-width: 100%;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+  overflow-wrap: anywhere;
+}
+.next-notes {
+  margin-top: 0.55rem;
 }
 .warning-line {
   display: flex;
@@ -482,9 +545,31 @@ h4 {
 }
 .quick-actions {
   display: grid;
-  grid-template-columns: 1.2fr 1.2fr 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.6rem;
   margin: 1rem 0;
+}
+.quick-action-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+.quick-action-count {
+  display: inline-grid;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  place-items: center;
+  border-radius: 999px;
+  padding-inline: 0.3rem;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+.tab-nav {
+  display: none;
 }
 .reservation-summary {
   color: var(--ink-soft);
@@ -493,59 +578,183 @@ h4 {
 .reservation-group {
   margin-top: 1.4rem;
 }
-.reservation-group > h3 {
+.reservation-group > summary,
+.collapsed-day > summary,
+.past-days > summary {
+  min-height: 48px;
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 0.55rem 0.85rem;
   color: var(--ink-soft);
   font-size: 0.92rem;
-  margin-bottom: 0.15rem;
+  font-weight: 750;
+  cursor: pointer;
 }
-.reservation-group > h3 .count {
+.reservation-group > summary::after,
+.collapsed-day > summary::after,
+.past-days > summary::after {
+  content: '';
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 150ms ease;
+}
+.reservation-group[open] > summary::after,
+.collapsed-day[open] > summary::after,
+.past-days[open] > summary::after {
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+.reservation-group > summary .count {
+  margin-left: auto;
   border: 1px solid currentColor;
   border-radius: 999px;
   padding: 0.05rem 0.5rem;
   font-size: 0.72rem;
   font-weight: 800;
 }
-.reservation-group.required > h3 {
+.reservation-group.required > summary {
   color: var(--warning);
 }
-.reservation-group.recommended > h3 {
+.reservation-group.recommended > summary {
   color: var(--focus);
 }
-.reservation-group.booked > h3 {
+.reservation-group.booked > summary {
   color: var(--accent);
 }
-.reservation-group > .helper {
+.reservation-items {
+  padding-top: 0.8rem;
+}
+.reservation-items > .helper {
   display: block;
   margin-bottom: 0.6rem;
 }
 .reservation-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.8rem;
-  padding: 0.9rem;
-  border-left-width: 4px;
-}
-.reservation-card.required {
-  border-left-color: var(--warning);
-}
-.reservation-card.recommended {
-  border-left-color: var(--focus);
-}
-.reservation-card.booked {
-  border-left-color: var(--accent);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 1rem;
 }
 .reservation-card.pending {
   border-style: dashed;
 }
+.reservation-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.7rem;
+}
+.reservation-actions .icon-button {
+  margin-left: auto;
+  flex: 0 0 44px;
+}
+.booking-control {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 15rem;
+}
+.booking-control select {
+  min-height: 44px;
+  padding: 0.55rem 0.65rem;
+  font-size: 1rem;
+}
+.day-nav {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  gap: 0.4rem;
+  margin: 0 -0.15rem;
+  padding: 0.5rem 0.15rem 0.65rem;
+  background: var(--paper);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.day-chip {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: center;
+  gap: 0.05rem;
+  min-width: 3rem;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0.35rem 0.55rem;
+  font-weight: 700;
+}
+.day-chip-dow {
+  color: var(--ink-soft);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.day-chip-num {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+.day-chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.day-chip.past {
+  opacity: 0.55;
+}
+.day-chip.next {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.day-chip.today {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.day-chip.today .day-chip-dow {
+  color: #d7e5dd;
+}
+.day-chip.today .day-chip-dot {
+  background: #fff;
+}
 .day-group {
   margin-top: 1.4rem;
+  scroll-margin-top: 4.4rem;
 }
 .day-group > h3 {
   color: var(--ink-soft);
   font-size: 0.92rem;
+}
+.past-days {
+  margin-top: 1.4rem;
+  scroll-margin-top: 4.4rem;
+}
+.past-days .day-group {
+  margin-top: 0.9rem;
+}
+.collapsed-day > summary,
+.past-days > summary {
+  justify-content: flex-start;
+}
+.collapsed-day > summary small,
+.past-days > summary small {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.collapsed-day[open] > summary,
+.past-days[open] > summary {
+  margin-bottom: 0.7rem;
 }
 .plan-list {
   display: grid;
@@ -585,6 +794,10 @@ h4 {
   color: var(--warning);
   border-style: dashed;
 }
+.flag.confirmed {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .flag.done {
   color: var(--ink-soft);
   background: #eeeee7;
@@ -609,11 +822,18 @@ h4 {
   color: var(--ink-soft);
   font-size: 0.85rem;
 }
+.plan-content {
+  min-width: 0;
+}
 .plan-heading {
   display: flex;
   align-items: start;
   justify-content: space-between;
   gap: 0.5rem;
+}
+.plan-heading h4 {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .dot {
   width: 11px;
@@ -635,6 +855,23 @@ h4 {
   flex-direction: column;
   gap: 0.1rem;
 }
+.notes > summary,
+.details > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+.notes > summary::before,
+.details > summary::before {
+  content: '▸';
+  font-size: 0.8em;
+  transition: transform 150ms ease;
+}
+details.notes[open] > summary::before,
+details.details[open] > summary::before {
+  transform: rotate(90deg);
+}
 .notes summary {
   color: var(--accent);
   font-weight: 700;
@@ -649,6 +886,9 @@ h4 {
   text-align: center;
   color: var(--ink-soft);
 }
+.empty-actions {
+  justify-content: center;
+}
 .sheet-backdrop {
   position: fixed;
   inset: 0;
@@ -661,16 +901,26 @@ h4 {
   width: min(100%, 720px);
   max-height: min(88dvh, 780px);
   margin: 0 auto;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
   border-radius: 16px 16px 0 0;
-  padding: 1.15rem;
-  padding-bottom: max(1.15rem, env(safe-area-inset-bottom));
 }
 .sheet-header {
+  flex: 0 0 auto;
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1rem;
+  padding: 1rem 1.15rem 0.85rem;
+  border-bottom: 1px solid var(--line);
+}
+.sheet-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1rem 1.15rem max(1.15rem, env(safe-area-inset-bottom));
 }
 .sheet-actions,
 .inline-actions,
@@ -703,7 +953,7 @@ h4 {
 }
 .csv-input {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.9rem;
+  font-size: 1rem;
 }
 .csv-help {
   display: grid;
@@ -804,6 +1054,18 @@ h4 {
   .primary-button:hover {
     background: #2c2f28;
   }
+  .icon-button:hover,
+  .secondary-button:hover,
+  .file-button:hover,
+  .next-action:hover {
+    background: #efede7;
+  }
+  .next-action.primary:hover {
+    background: #254b3d;
+  }
+  .location-link:hover {
+    color: var(--accent);
+  }
 }
 
 @media (max-width: 620px) {
@@ -811,48 +1073,164 @@ h4 {
   .app-shell {
     padding-inline: 0.8rem;
   }
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    overflow: hidden;
+    padding-bottom: 0;
+  }
+  .app-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 1.25rem;
+  }
+  .inline-nav {
+    display: none;
+  }
+  .app-header {
+    flex: 0 0 auto;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding-bottom: 0.85rem;
+  }
+  .app-header > div {
+    width: 100%;
+    min-width: 0;
+  }
+  .app-header h1 {
+    font-size: 1.7rem;
+    line-height: 1.05;
+    overflow-wrap: anywhere;
+  }
+  .sync-pill {
+    align-self: flex-start;
+    min-height: 40px;
+  }
   .next-card {
-    grid-template-columns: 1fr;
-    padding: 1rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.9rem;
   }
   .next-meta {
     align-items: flex-start;
+    flex-direction: column;
+    gap: 0.45rem;
+    letter-spacing: 0.05em;
+  }
+  .next-flags {
+    justify-content: flex-start;
+  }
+  .next-main h3 {
+    font-size: 1.55rem;
+    overflow-wrap: anywhere;
+  }
+  .next-time {
+    font-size: clamp(1.45rem, 7vw, 2rem);
   }
   .leave-box {
     border-top: 1px solid var(--line);
-    padding-top: 0.8rem;
+    padding-top: 0.75rem;
+  }
+  .leave-box strong {
+    font-size: 1.25rem;
   }
   .next-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
   }
-  .quick-actions {
-    position: sticky;
-    bottom: 0.7rem;
-    z-index: 5;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .next-action {
+    width: 100%;
+    min-width: 0;
+    gap: 0.3rem;
+    padding-inline: 0.35rem;
+    border-radius: 12px;
+    font-size: 0.76rem;
+    white-space: nowrap;
+  }
+  .next-action:last-child:nth-child(odd) {
+    grid-column: 1;
+  }
+  .quick-actions.tab-nav {
+    display: grid;
+    flex: 0 0 auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+    margin: 0 -0.8rem;
+    padding: 0.45rem max(0.75rem, env(safe-area-inset-left, 0px))
+      calc(0.45rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line);
+    background: var(--paper);
+    box-shadow: 0 -8px 24px rgb(23 25 20 / 0.08);
   }
   .quick-actions .primary-button,
   .quick-actions .secondary-button {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 60px;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.45rem 0.2rem;
+    border-radius: 12px;
+    font-size: 0.76rem;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+  .quick-actions .primary-button {
     background: var(--ink);
     color: #fff;
   }
   .quick-actions .secondary-button {
     background: var(--surface);
     color: var(--ink);
-    box-shadow: 0 8px 30px rgb(23 25 20 / 0.12);
+    box-shadow: none;
+  }
+  .quick-action-label {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .quick-action-count {
+    position: absolute;
+    top: 0.2rem;
+    right: 0.35rem;
+    min-width: 1.15rem;
+    height: 1.15rem;
+    padding-inline: 0.2rem;
+    border: 1px solid var(--surface);
+    font-size: 0.68rem;
   }
   .form-grid,
   .details-grid {
     grid-template-columns: 1fr;
   }
   .plan-card {
-    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-columns: 2.8rem minmax(0, 1fr);
+    gap: 0.65rem;
+    padding: 0.75rem;
+  }
+  .time-column strong {
+    font-size: 0.92rem;
+  }
+  .time-column span {
+    font-size: 0.78rem;
   }
   .card-actions {
     grid-column: 2;
     flex-direction: row;
+    flex-wrap: wrap;
     justify-content: flex-end;
+    gap: 0.25rem;
+  }
+  .plan-card .card-actions .icon-button {
+    flex: 0 0 44px;
+  }
+  .reservation-card {
+    padding: 0.8rem;
   }
   .conflict-card {
     align-items: stretch;

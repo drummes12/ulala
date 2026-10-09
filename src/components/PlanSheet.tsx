@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { DateTime } from 'luxon'
 import type { LocalPlan, PlanInput } from '../types'
+import { useDialogFocus } from '../lib/useDialogFocus'
 
 interface PlanSheetProps {
   plan?: LocalPlan
@@ -22,6 +23,7 @@ export function PlanSheet({ plan, timezone, onClose, onSave }: PlanSheetProps) {
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const dialogRef = useDialogFocus<HTMLElement>()
 
   useEffect(() => {
     if (!plan) return
@@ -63,8 +65,10 @@ export function PlanSheet({ plan, timezone, onClose, onSave }: PlanSheetProps) {
       className='sheet-backdrop'
       role='presentation'
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      onKeyDown={(event) => event.key === 'Escape' && onClose()}
     >
       <section
+        ref={dialogRef}
         className='sheet'
         role='dialog'
         aria-modal='true'
@@ -83,7 +87,7 @@ export function PlanSheet({ plan, timezone, onClose, onSave }: PlanSheetProps) {
             ×
           </button>
         </header>
-        <form className='stack' onSubmit={submit}>
+        <form className='stack sheet-body' onSubmit={submit}>
           <label>
             <span>Qué van a hacer</span>
             <input
@@ -92,7 +96,6 @@ export function PlanSheet({ plan, timezone, onClose, onSave }: PlanSheetProps) {
               required
               maxLength={160}
               placeholder='Cena en el centro'
-              autoFocus
             />
           </label>
           <div className='form-grid'>
